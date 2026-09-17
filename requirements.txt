@@ -1,0 +1,5 @@
+rtmlib
+opencv-python
+opencv-contrib-python
+numpy
+onnxruntime

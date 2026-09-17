@@ -1,1 +1,23 @@
-.venv
+# Ambiente Virtual Python
+venv/
+.venv/
+env/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Arquivos de Vídeo de Entrada e Saída (Arquivos pesados)
+input/*.mp4
+input/*.avi
+input/*.mov
+input/*.mkv
+output/*.mp4
+
+# Opcional: Resultados gerados localmente
+output/*.csv
+output/*.txt
+
+# Arquivos de configuração do VS Code / Sistema
+.vscode/
+.DS_Store

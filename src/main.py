@@ -5,6 +5,7 @@ Pipeline de Pose Estimation com RTMPose (via rtmlib) para Análise Biomecânica 
 Métricas 2D Calculadas e Exibidas no Vídeo:
   - Visualização dos Ângulos Articulares (Cotovelo, Ombro, Joelho).
   - Painel de métricas na tela (Frame, Velocidade do Punho).
+  - Detecção Automática de Eventos Biomecânicos (Peak Velocity, Cocking, Salto, Aterrissagem).
   - Exportação estruturada para CSV e TXT Formatado usando Pandas.
 
 Requisitos:
@@ -80,7 +81,7 @@ class BiomechanicalEngine:
 
         features = {}
 
-        # 1. Ângulos
+        # 1. Ângulos Projetados em 2D
         features["left_elbow_angle"] = calculate_angle_2d(kpts["left_shoulder"], kpts["left_elbow"], kpts["left_wrist"])
         features["right_elbow_angle"] = calculate_angle_2d(kpts["right_shoulder"], kpts["right_elbow"], kpts["right_wrist"])
 
@@ -93,12 +94,12 @@ class BiomechanicalEngine:
         features["left_shoulder_angle"] = calculate_angle_2d(kpts["left_elbow"], kpts["left_shoulder"], kpts["left_hip"])
         features["right_shoulder_angle"] = calculate_angle_2d(kpts["right_elbow"], kpts["right_shoulder"], kpts["right_hip"])
 
-        # 2. Normalização
+        # 2. Normalização de Escala (Altura Aparente em Pixels)
         mid_ankle_y = (kpts["left_ankle"][1] + kpts["right_ankle"][1]) / 2.0
         body_height_px = abs(mid_ankle_y - kpts["nose"][1])
         features["body_height_px"] = body_height_px if body_height_px > 0 else np.nan
 
-        # 3. Velocidade Aparente do Punho
+        # 3. Velocidade Aparente do Punho (px/s)
         dt = 1.0 / fps if fps > 0 else 0.033
         for side in ["left", "right"]:
             wrist_key = f"{side}_wrist"
@@ -106,18 +107,17 @@ class BiomechanicalEngine:
 
             if prev_wrist_pos and side in prev_wrist_pos and prev_wrist_pos[side] is not None:
                 dist_px = np.linalg.norm(curr_pos - prev_wrist_pos[side])
-                features[f"{side}_wrist_velocity_px_s"] = dist_px / dt
+                features[f"{side}_wrist_apparent_velocity_px_s"] = dist_px / dt
             else:
-                features[f"{side}_wrist_velocity_px_s"] = np.nan
+                features[f"{side}_wrist_apparent_velocity_px_s"] = np.nan
 
         return features, {"left": kpts["left_wrist"], "right": kpts["right_wrist"]}
 
     @staticmethod
-    def draw_annotations(frame: np.ndarray, person_kpts: np.ndarray, features: dict):
-        """Desenha os ângulos calculados diretamente sobre as articulações no vídeo."""
+    def draw_annotations(frame: np.ndarray, person_kpts: np.ndarray, features: dict, current_event: str = None):
+        """Desenha os ângulos calculados e eventos detectados diretamente sobre a imagem."""
         kpts = {name: person_kpts[i] for i, name in enumerate(KEYPOINT_NAMES)}
 
-        # Lista de articulações para exibir texto de ângulo no frame
         angles_to_draw = [
             ("right_elbow", features.get("right_elbow_angle")),
             ("left_elbow", features.get("left_elbow_angle")),
@@ -132,9 +132,58 @@ class BiomechanicalEngine:
                 if conf >= KPT_CONF_THRESHOLD:
                     x, y = int(pt[0]), int(pt[1])
                     text = f"{int(angle_val)}deg"
-                    # Desenha um fundo escuro leve no texto para destacar
                     cv2.putText(frame, text, (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
                     cv2.putText(frame, text, (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+
+        # Destacar o Evento Detectado
+        if current_event:
+            cv2.putText(frame, f"EVENTO: {current_event.upper()}", (20, 85), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+
+# ============================================================
+# DETECTOR DE EVENTOS BIOMECÂNICOS
+# ============================================================
+
+class EventDetector:
+    """Analisador de séries temporais para detecção automática de eventos motores."""
+
+    @staticmethod
+    def detect_events(df: pd.DataFrame) -> pd.DataFrame:
+        df["detected_event"] = None
+
+        if df.empty:
+            return df
+
+        for person_id in df["person_id"].unique():
+            p_mask = df["person_id"] == person_id
+            p_df = df[p_mask].copy()
+
+            # 1. Peak Hand Velocity (Maior velocidade aparente de qualquer punho)
+            r_vel = p_df["right_wrist_apparent_velocity_px_s"].fillna(0)
+            l_vel = p_df["left_wrist_apparent_velocity_px_s"].fillna(0)
+            max_vel_series = np.maximum(r_vel, l_vel)
+
+            if max_vel_series.max() > 0:
+                peak_vel_idx = max_vel_series.idxmax()
+                df.loc[peak_vel_idx, "detected_event"] = "peak_hand_velocity"
+
+                # 2. Cocking / Backswing (Ângulo máximo do cotovelo antes do pico de velocidade)
+                pre_peak_df = p_df.loc[:peak_vel_idx]
+                if not pre_peak_df.empty:
+                    max_elbow_idx = pre_peak_df["right_elbow_angle"].idxmax()
+                    if pd.notna(max_elbow_idx):
+                        df.loc[max_elbow_idx, "detected_event"] = "cocking_backswing"
+
+            # 3. Take-off e Landing (Variação da altura Y do tornozelo)
+            ankles_y = (p_df["left_ankle_y"] + p_df["right_ankle_y"]) / 2.0
+            min_y_idx = ankles_y.idxmin()  # Menor valor de Y significa ponto mais alto no vídeo (salto)
+            
+            # Se houve elevação significativa
+            if ankles_y.max() - ankles_y.min() > 30:  # Threshold mínimo de movimento vertical em px
+                df.loc[min_y_idx, "detected_event"] = "jump_peak"
+
+        return df
 
 
 # ============================================================
@@ -171,7 +220,7 @@ class PoseDetector:
 
 
 # ============================================================
-# EXPORTADOR CSV/TXT ORGANIZADO (PANDAS)
+# EXPORTADOR CSV/TXT ORGANIZADO (MONOSPACED TABLE)
 # ============================================================
 
 class CSVExporter:
@@ -183,34 +232,78 @@ class CSVExporter:
         for person_id, (kpts, feat) in enumerate(zip(people_keypoints, features_list)):
             row = {"frame": frame_index, "person_id": person_id}
             
+            # Keypoints
             for name, (x, y, conf) in zip(KEYPOINT_NAMES, kpts):
                 row[f"{name}_x"] = round(float(x), 2)
                 row[f"{name}_y"] = round(float(y), 2)
                 row[f"{name}_conf"] = round(float(conf), 2)
             
+            # Features biomecânicas
             for feat_name, val in feat.items():
                 row[feat_name] = round(float(val), 2) if not np.isnan(val) else None
 
             self.rows.append(row)
 
-    def save(self):
+    def _export_monospaced_txt_table(self, df: pd.DataFrame, txt_path: Path):
+        """
+        Gera uma tabela com espaçamento fixo (Monospaced Grid Table).
+        Garante alinhamento vertical perfeito de cada coluna em fontes monoespaçadas.
+        """
+        formatted_df = df.fillna("-")
+        str_df = formatted_df.astype(str)
+
+        col_widths = {}
+        for col in str_df.columns:
+            max_len = max(str_df[col].apply(len).max(), len(col))
+            col_widths[col] = max_len + 3
+
+        try:
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write("=" * 80 + "\n")
+                f.write(" SPIKE.AI - TABELA DE DADOS BIOMECÂNICOS 2D (SÉRIE TEMPORAL)\n")
+                f.write("=" * 80 + "\n\n")
+
+                header_str = "".join([f"{col:<{col_widths[col]}}" for col in str_df.columns])
+                f.write(header_str + "\n")
+
+                separator_str = "".join(["-" * (col_widths[col] - 1) + " " for col in str_df.columns])
+                f.write(separator_str + "\n")
+
+                for _, row in str_df.iterrows():
+                    row_str = "".join([f"{row[col]:<{col_widths[col]}}" for col in str_df.columns])
+                    f.write(row_str + "\n")
+
+                f.write("\n" + "=" * 80 + "\n")
+                f.write(f" Total de Registros Exportados: {len(df)} | Colunas: {len(df.columns)}\n")
+
+            print(f"Tabela TXT Alinhada salva em: {txt_path}")
+        except PermissionError:
+            print(f"\n[ERRO DE PERMISSÃO] Não foi possível gravar em '{txt_path}'. Feche o arquivo TXT se estiver aberto.")
+
+    def process_and_save(self) -> pd.DataFrame:
         if not self.rows:
             print("Nenhum dado coletado para exportação.")
-            return
+            return pd.DataFrame()
 
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         df = pd.DataFrame(self.rows)
 
-        # Exporta o CSV padrão
-        df.to_csv(self.output_path, index=False, sep=",", encoding="utf-8-sig")
+        # Aplica a detecção automática de eventos
+        df = EventDetector.detect_events(df)
 
-        # Exporta uma versão em arquivo de texto com colunas alinhadas por espaço
+        # 1. Salva CSV com separador ';' para o Excel abrir em colunas separadas automaticamente
+        try:
+            df.to_csv(self.output_path, index=False, sep=";", encoding="utf-8-sig")
+            print(f"CSV Bruto salvo em        : {self.output_path}")
+        except PermissionError:
+            print(f"\n[ERRO DE PERMISSÃO] O arquivo '{self.output_path}' está aberto no Excel!")
+            print("Por favor, feche o Excel e execute o script novamente para atualizar o arquivo.\n")
+
+        # 2. Salva Tabela Monospaced no TXT (para leitura no VS Code/Bloco de Notas)
         txt_output_path = self.output_path.with_suffix(".txt")
-        with open(txt_output_path, "w", encoding="utf-8") as f:
-            f.write(df.to_string(index=False))
+        self._export_monospaced_txt_table(df, txt_output_path)
 
-        print(f"CSV salvo em: {self.output_path}")
-        print(f"Tabela de texto alinhada salva em: {txt_output_path} ({len(df)} linhas)")
+        return df
 
 
 # ============================================================
@@ -236,16 +329,14 @@ def process_single_video(video_path: Path, detector: PoseDetector):
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    writer = None
-    if SAVE_VIDEO:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(video_output_path), fourcc, fps, (width, height))
-
     frame_index = 0
     prev_wrists = {}
+    frames_cache = []
+    features_cache = []
+    people_kpts_cache = []
     start_time = time.time()
 
+    # Passagem 1: Extrair features e ler todos os frames
     try:
         while cap.isOpened():
             success, frame = cap.read()
@@ -261,34 +352,48 @@ def process_single_video(video_path: Path, detector: PoseDetector):
                 features_list.append(feat)
                 prev_wrists[person_id] = curr_w
 
-                # Desenha os ângulos sob as articulações no vídeo anotado
-                BiomechanicalEngine.draw_annotations(annotated_frame, kpts, feat)
-
-            # Painel HUD com informações do vídeo
-            cv2.putText(annotated_frame, f"Frame: {frame_index}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(annotated_frame, "Spike.AI - Motion Engine", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-
             exporter.add_frame(frame_index, people_keypoints, features_list)
-
-            if writer is not None:
-                writer.write(annotated_frame)
-
-            if SHOW_PREVIEW:
-                cv2.imshow("Spike.AI Biomechanics", annotated_frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+            
+            frames_cache.append(annotated_frame)
+            features_cache.append(features_list)
+            people_kpts_cache.append(people_keypoints)
 
             frame_index += 1
 
     finally:
-        elapsed_time = time.time() - start_time
         cap.release()
-        if writer is not None:
-            writer.release()
-        cv2.destroyAllWindows()
-        exporter.save()
 
-        print(f"Processamento concluído em {elapsed_time:.2f}s | Total de frames: {frame_index}")
+    # Processa os eventos no DataFrame completo e salva TXT/CSV
+    df_events = exporter.process_and_save()
+
+    # Passagem 2: Renderizar vídeo final (Limpo)
+    if SAVE_VIDEO and frames_cache:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(str(video_output_path), fourcc, fps, (width, height))
+
+        for idx, (frame, features_list, people_keypoints) in enumerate(zip(frames_cache, features_cache, people_kpts_cache)):
+            # Evento detectado para exibição visual
+            event_name = None
+            if not df_events.empty:
+                frame_events = df_events[df_events["frame"] == idx]["detected_event"].dropna()
+                if not frame_events.empty:
+                    event_name = frame_events.iloc[0]
+
+            # Exibe apenas o evento na tela se ele ocorrer (sem os ângulos nas articulações)
+            if event_name:
+                cv2.putText(frame, f"EVENTO: {event_name.upper()}", (20, 60), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+            # Exibe apenas o contador do número do Frame
+            cv2.putText(frame, f"Frame: {idx}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            writer.write(frame)
+
+        writer.release()
+
+    elapsed_time = time.time() - start_time
+    print(f"Processamento concluído em {elapsed_time:.2f}s | Total de frames: {frame_index}")
 
 
 # ============================================================
@@ -310,7 +415,7 @@ def main():
         print(f"Nenhum vídeo localizado na pasta '{INPUT_DIR}/'.")
         return
 
-    print(f"Localizados {len(video_files)} vídeos. Iniciando RTMPose (Task 3)")
+    print(f"Localizado(s) {len(video_files)} vídeo(s). Iniciando RTMPose (Task 3)")
     detector = PoseDetector(mode=POSE_MODE, backend=BACKEND, device=DEVICE)
 
     for video_file in video_files:

@@ -3,10 +3,15 @@ Spike.AI - Motion Engine (Task 3 da Issue 6)
 Pipeline de Pose Estimation com RTMPose (via rtmlib) para Análise Biomecânica de Voleibol.
 
 Métricas 2D Calculadas e Exibidas no Vídeo:
-  - Visualização dos Ângulos Articulares (Cotovelo, Ombro, Joelho).
-  - Painel de métricas na tela (Frame, Velocidade do Punho).
+  - Visualização dos Ângulos Articulares Projetados em 2D.
+  - Painel de métricas na tela (Frame, Velocidade Aparente do Punho).
   - Detecção Automática de Eventos Biomecânicos (Peak Velocity, Cocking, Salto, Aterrissagem).
-  - Exportação estruturada para CSV e TXT Formatado usando Pandas.
+  - Exportação estruturada para CSV e TXT Formatado com Nomenclatura Explícita 2D.
+
+NOTA TÉCNICA DE BIOMECÂNICA 2D:
+  - As métricas calculadas correspondem a projeções no plano 2D da imagem.
+  - Ângulos (*_angle_2d_proj): Ângulos planos formados no plano da câmera (sem compensação de profundidade 3D).
+  - Velocidades (*_apparent_velocity_px_s): Velocidade escalar aparente medida no plano em pixels/segundo.
 
 Requisitos:
     pip install rtmlib opencv-python opencv-contrib-python numpy onnxruntime pandas
@@ -58,7 +63,7 @@ SKELETON_CONNECTIONS = [
 # ============================================================
 
 def calculate_angle_2d(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
-    """Calcula o ângulo 2D em graus entre três pontos (A -> B -> C) onde B é o vértice."""
+    """Calcula o ângulo plano projetado em 2D (em graus) entre três pontos (A -> B -> C) no plano da imagem."""
     if np.any(np.isnan(a)) or np.any(np.isnan(b)) or np.any(np.isnan(c)):
         return np.nan
 
@@ -73,7 +78,7 @@ def calculate_angle_2d(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
 
 
 class BiomechanicalEngine:
-    """Extrai as features derivadas e anota métricas visuais no vídeo."""
+    """Extrai as features derivadas com nomenclatura explícita de projeção 2D."""
 
     @staticmethod
     def extract_features(person_kpts: np.ndarray, fps: float, prev_wrist_pos=None):
@@ -81,25 +86,25 @@ class BiomechanicalEngine:
 
         features = {}
 
-        # 1. Ângulos Projetados em 2D
-        features["left_elbow_angle"] = calculate_angle_2d(kpts["left_shoulder"], kpts["left_elbow"], kpts["left_wrist"])
-        features["right_elbow_angle"] = calculate_angle_2d(kpts["right_shoulder"], kpts["right_elbow"], kpts["right_wrist"])
+        # 1. Ângulos Planos Projetados em 2D (Especificação Explícita de Projeção)
+        features["left_elbow_angle_2d_proj"] = calculate_angle_2d(kpts["left_shoulder"], kpts["left_elbow"], kpts["left_wrist"])
+        features["right_elbow_angle_2d_proj"] = calculate_angle_2d(kpts["right_shoulder"], kpts["right_elbow"], kpts["right_wrist"])
 
-        features["left_knee_angle"] = calculate_angle_2d(kpts["left_hip"], kpts["left_knee"], kpts["left_ankle"])
-        features["right_knee_angle"] = calculate_angle_2d(kpts["right_hip"], kpts["right_knee"], kpts["right_ankle"])
+        features["left_knee_angle_2d_proj"] = calculate_angle_2d(kpts["left_hip"], kpts["left_knee"], kpts["left_ankle"])
+        features["right_knee_angle_2d_proj"] = calculate_angle_2d(kpts["right_hip"], kpts["right_knee"], kpts["right_ankle"])
 
-        features["left_hip_angle"] = calculate_angle_2d(kpts["left_shoulder"], kpts["left_hip"], kpts["left_knee"])
-        features["right_hip_angle"] = calculate_angle_2d(kpts["right_shoulder"], kpts["right_hip"], kpts["right_knee"])
+        features["left_hip_angle_2d_proj"] = calculate_angle_2d(kpts["left_shoulder"], kpts["left_hip"], kpts["left_knee"])
+        features["right_hip_angle_2d_proj"] = calculate_angle_2d(kpts["right_shoulder"], kpts["right_hip"], kpts["right_knee"])
 
-        features["left_shoulder_angle"] = calculate_angle_2d(kpts["left_elbow"], kpts["left_shoulder"], kpts["left_hip"])
-        features["right_shoulder_angle"] = calculate_angle_2d(kpts["right_elbow"], kpts["right_shoulder"], kpts["right_hip"])
+        features["left_shoulder_angle_2d_proj"] = calculate_angle_2d(kpts["left_elbow"], kpts["left_shoulder"], kpts["left_hip"])
+        features["right_shoulder_angle_2d_proj"] = calculate_angle_2d(kpts["right_elbow"], kpts["right_shoulder"], kpts["right_hip"])
 
-        # 2. Normalização de Escala (Altura Aparente em Pixels)
+        # 2. Normalização de Escala (Altura Aparente em Pixels no Plano Focal)
         mid_ankle_y = (kpts["left_ankle"][1] + kpts["right_ankle"][1]) / 2.0
         body_height_px = abs(mid_ankle_y - kpts["nose"][1])
         features["body_height_px"] = body_height_px if body_height_px > 0 else np.nan
 
-        # 3. Velocidade Aparente do Punho (px/s)
+        # 3. Velocidade Aparente do Punho (px/s no Plano da Câmera)
         dt = 1.0 / fps if fps > 0 else 0.033
         for side in ["left", "right"]:
             wrist_key = f"{side}_wrist"
@@ -115,14 +120,14 @@ class BiomechanicalEngine:
 
     @staticmethod
     def draw_annotations(frame: np.ndarray, person_kpts: np.ndarray, features: dict, current_event: str = None):
-        """Desenha os ângulos calculados e eventos detectados diretamente sobre a imagem."""
+        """Desenha anotações no frame (quando ativado)."""
         kpts = {name: person_kpts[i] for i, name in enumerate(KEYPOINT_NAMES)}
 
         angles_to_draw = [
-            ("right_elbow", features.get("right_elbow_angle")),
-            ("left_elbow", features.get("left_elbow_angle")),
-            ("right_knee", features.get("right_knee_angle")),
-            ("left_knee", features.get("left_knee_angle")),
+            ("right_elbow", features.get("right_elbow_angle_2d_proj")),
+            ("left_elbow", features.get("left_elbow_angle_2d_proj")),
+            ("right_knee", features.get("right_knee_angle_2d_proj")),
+            ("left_knee", features.get("left_knee_angle_2d_proj")),
         ]
 
         for kpt_name, angle_val in angles_to_draw:
@@ -135,7 +140,6 @@ class BiomechanicalEngine:
                     cv2.putText(frame, text, (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
                     cv2.putText(frame, text, (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
 
-        # Destacar o Evento Detectado
         if current_event:
             cv2.putText(frame, f"EVENTO: {current_event.upper()}", (20, 85), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
@@ -159,7 +163,7 @@ class EventDetector:
             p_mask = df["person_id"] == person_id
             p_df = df[p_mask].copy()
 
-            # 1. Peak Hand Velocity (Maior velocidade aparente de qualquer punho)
+            # 1. Peak Hand Velocity
             r_vel = p_df["right_wrist_apparent_velocity_px_s"].fillna(0)
             l_vel = p_df["left_wrist_apparent_velocity_px_s"].fillna(0)
             max_vel_series = np.maximum(r_vel, l_vel)
@@ -168,20 +172,38 @@ class EventDetector:
                 peak_vel_idx = max_vel_series.idxmax()
                 df.loc[peak_vel_idx, "detected_event"] = "peak_hand_velocity"
 
-                # 2. Cocking / Backswing (Ângulo máximo do cotovelo antes do pico de velocidade)
+                # 2. Cocking / Backswing (Antes do pico de velocidade)
                 pre_peak_df = p_df.loc[:peak_vel_idx]
                 if not pre_peak_df.empty:
-                    max_elbow_idx = pre_peak_df["right_elbow_angle"].idxmax()
+                    max_elbow_idx = pre_peak_df["right_elbow_angle_2d_proj"].idxmax()
                     if pd.notna(max_elbow_idx):
                         df.loc[max_elbow_idx, "detected_event"] = "cocking_backswing"
 
-            # 3. Take-off e Landing (Variação da altura Y do tornozelo)
+            # 3. Análise da Fase Aérea (Salto, Take-off e Landing)
             ankles_y = (p_df["left_ankle_y"] + p_df["right_ankle_y"]) / 2.0
-            min_y_idx = ankles_y.idxmin()  # Menor valor de Y significa ponto mais alto no vídeo (salto)
             
-            # Se houve elevação significativa
-            if ankles_y.max() - ankles_y.min() > 30:  # Threshold mínimo de movimento vertical em px
-                df.loc[min_y_idx, "detected_event"] = "jump_peak"
+            # Altura base do solo (maior Y representa os pés no chão)
+            base_ground_y = ankles_y.quantile(0.8)
+            
+            # Ponto de altura máxima do salto (menor Y)
+            apex_idx = ankles_y.idxmin()
+            max_jump_height = base_ground_y - ankles_y.loc[apex_idx]
+
+            # Se houve salto significativo (> 30px de variação vertical)
+            if max_jump_height > 30:
+                df.loc[apex_idx, "detected_event"] = "jump_peak"
+
+                # Take-off: último frame no chão antes do ápice do salto
+                pre_apex = ankles_y.loc[:apex_idx]
+                takeoff_series = pre_apex[pre_apex >= base_ground_y - 10]
+                if not takeoff_series.empty:
+                    df.loc[takeoff_series.index[-1], "detected_event"] = "take_off"
+
+                # Landing: primeiro frame ao retornar à altura base após o ápice
+                post_apex = ankles_y.loc[apex_idx:]
+                landing_series = post_apex[post_apex >= base_ground_y - 10]
+                if not landing_series.empty:
+                    df.loc[landing_series.index[0], "detected_event"] = "landing"
 
         return df
 
@@ -238,7 +260,7 @@ class CSVExporter:
                 row[f"{name}_y"] = round(float(y), 2)
                 row[f"{name}_conf"] = round(float(conf), 2)
             
-            # Features biomecânicas
+            # Features biomecânicas (com a nova nomenclatura 2D explicitada)
             for feat_name, val in feat.items():
                 row[feat_name] = round(float(val), 2) if not np.isnan(val) else None
 
@@ -247,7 +269,7 @@ class CSVExporter:
     def _export_monospaced_txt_table(self, df: pd.DataFrame, txt_path: Path):
         """
         Gera uma tabela com espaçamento fixo (Monospaced Grid Table).
-        Garante alinhamento vertical perfeito de cada coluna em fontes monoespaçadas.
+        Contém explicitamente a notas técnicas sobre a natureza projetada (2D) dos dados.
         """
         formatted_df = df.fillna("-")
         str_df = formatted_df.astype(str)
@@ -259,9 +281,11 @@ class CSVExporter:
 
         try:
             with open(txt_path, "w", encoding="utf-8") as f:
-                f.write("=" * 80 + "\n")
+                f.write("=" * 90 + "\n")
                 f.write(" SPIKE.AI - TABELA DE DADOS BIOMECÂNICOS 2D (SÉRIE TEMPORAL)\n")
-                f.write("=" * 80 + "\n\n")
+                f.write(" NOTA TÉCNICA: Os ângulos (*_angle_2d_proj) são projeções no plano da imagem.\n")
+                f.write("               Velocidades (*_apparent_velocity_px_s) são relativas à escala em pixels.\n")
+                f.write("=" * 90 + "\n\n")
 
                 header_str = "".join([f"{col:<{col_widths[col]}}" for col in str_df.columns])
                 f.write(header_str + "\n")
@@ -273,7 +297,7 @@ class CSVExporter:
                     row_str = "".join([f"{row[col]:<{col_widths[col]}}" for col in str_df.columns])
                     f.write(row_str + "\n")
 
-                f.write("\n" + "=" * 80 + "\n")
+                f.write("\n" + "=" * 90 + "\n")
                 f.write(f" Total de Registros Exportados: {len(df)} | Colunas: {len(df.columns)}\n")
 
             print(f"Tabela TXT Alinhada salva em: {txt_path}")
@@ -291,7 +315,7 @@ class CSVExporter:
         # Aplica a detecção automática de eventos
         df = EventDetector.detect_events(df)
 
-        # 1. Salva CSV com separador ';' para o Excel abrir em colunas separadas automaticamente
+        # 1. Salva CSV com separador ';' para Excel
         try:
             df.to_csv(self.output_path, index=False, sep=";", encoding="utf-8-sig")
             print(f"CSV Bruto salvo em        : {self.output_path}")
@@ -415,7 +439,7 @@ def main():
         print(f"Nenhum vídeo localizado na pasta '{INPUT_DIR}/'.")
         return
 
-    print(f"Localizado(s) {len(video_files)} vídeo(s). Iniciando RTMPose (Task 3)")
+    print(f"Localizados {len(video_files)} vídeos. Iniciando RTMPose (Task 3)")
     detector = PoseDetector(mode=POSE_MODE, backend=BACKEND, device=DEVICE)
 
     for video_file in video_files:

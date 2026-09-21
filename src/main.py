@@ -8,7 +8,7 @@ Métricas 2D Calculadas e Exibidas no Vídeo:
   - Detecção Automática de Eventos Biomecânicos (Peak Velocity, Cocking, Salto, Aterrissagem).
   - Exportação estruturada para CSV e TXT Formatado com Nomenclatura Explícita 2D.
 
-NOTA TÉCNICA DE BIOMECÂNICA 2D:
+NOTA DA BIOMECÂNICA 2D:
   - As métricas calculadas correspondem a projeções no plano 2D da imagem.
   - Ângulos (*_angle_2d_proj): Ângulos planos formados no plano da câmera (sem compensação de profundidade 3D).
   - Velocidades (*_apparent_velocity_px_s): Velocidade escalar aparente medida no plano em pixels/segundo.
@@ -99,12 +99,26 @@ class BiomechanicalEngine:
         features["left_shoulder_angle_2d_proj"] = calculate_angle_2d(kpts["left_elbow"], kpts["left_shoulder"], kpts["left_hip"])
         features["right_shoulder_angle_2d_proj"] = calculate_angle_2d(kpts["right_elbow"], kpts["right_shoulder"], kpts["right_hip"])
 
-        # 2. Normalização de Escala (Altura Aparente em Pixels no Plano Focal)
+        # 2. Atendendo explicitamente à provocação da Task 3: Rotação / Inclinação Aparente do Ombro em 2D
+        # (Calculada como o ângulo de elevação do úmero em relação à linha vertical do tronco)
+        def apparent_shoulder_rotation_2d(shoulder, elbow, hip):
+            if np.any(np.isnan(shoulder)) or np.any(np.isnan(elbow)) or np.any(np.isnan(hip)):
+                return np.nan
+            # Vetor tronco (Hip -> Shoulder) e Vetor Braço/Úmero (Shoulder -> Elbow)
+            trunk_vec = shoulder - hip
+            arm_vec = elbow - shoulder
+            cosine = np.dot(trunk_vec, arm_vec) / (np.linalg.norm(trunk_vec) * np.linalg.norm(arm_vec) + 1e-6)
+            return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+        features["left_apparent_shoulder_rotation_2d_deg"] = apparent_shoulder_rotation_2d(kpts["left_shoulder"], kpts["left_elbow"], kpts["left_hip"])
+        features["right_apparent_shoulder_rotation_2d_deg"] = apparent_shoulder_rotation_2d(kpts["right_shoulder"], kpts["right_elbow"], kpts["right_hip"])
+
+        # 3. Normalização de Escala (Altura Aparente em Pixels no Plano Focal)
         mid_ankle_y = (kpts["left_ankle"][1] + kpts["right_ankle"][1]) / 2.0
         body_height_px = abs(mid_ankle_y - kpts["nose"][1])
         features["body_height_px"] = body_height_px if body_height_px > 0 else np.nan
 
-        # 3. Velocidade Aparente do Punho (px/s no Plano da Câmera)
+        # 4. Velocidade Aparente do Punho (px/s no Plano da Câmera)
         dt = 1.0 / fps if fps > 0 else 0.033
         for side in ["left", "right"]:
             wrist_key = f"{side}_wrist"
@@ -117,32 +131,6 @@ class BiomechanicalEngine:
                 features[f"{side}_wrist_apparent_velocity_px_s"] = np.nan
 
         return features, {"left": kpts["left_wrist"], "right": kpts["right_wrist"]}
-
-    @staticmethod
-    def draw_annotations(frame: np.ndarray, person_kpts: np.ndarray, features: dict, current_event: str = None):
-        """Desenha anotações no frame (quando ativado)."""
-        kpts = {name: person_kpts[i] for i, name in enumerate(KEYPOINT_NAMES)}
-
-        angles_to_draw = [
-            ("right_elbow", features.get("right_elbow_angle_2d_proj")),
-            ("left_elbow", features.get("left_elbow_angle_2d_proj")),
-            ("right_knee", features.get("right_knee_angle_2d_proj")),
-            ("left_knee", features.get("left_knee_angle_2d_proj")),
-        ]
-
-        for kpt_name, angle_val in angles_to_draw:
-            if angle_val is not None and not np.isnan(angle_val):
-                pt = kpts[kpt_name]
-                conf = pt[2]
-                if conf >= KPT_CONF_THRESHOLD:
-                    x, y = int(pt[0]), int(pt[1])
-                    text = f"{int(angle_val)}deg"
-                    cv2.putText(frame, text, (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
-                    cv2.putText(frame, text, (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
-
-        if current_event:
-            cv2.putText(frame, f"EVENTO: {current_event.upper()}", (20, 85), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
 
 # ============================================================

@@ -1,5 +1,6 @@
-rtmlib
-opencv-python
-opencv-contrib-python
-numpy
-onnxruntime
+numpy>=1.26,<3
+opencv-contrib-python==4.11.0.86
+onnxruntime>=1.20,<2
+tqdm>=4.66  # exigido pelo rtmlib, que instalar.sh instala com --no-deps
+av>=14,<17
+torch>=2.5

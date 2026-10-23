@@ -1,5 +1,5 @@
 # ============================================================
-# Spike.AI - Motion Engine & Benchmark Suite (Task 2 & 3)
+# Spike.AI - Motion Engine & Benchmark Suite + Depth Estimation
 # ============================================================
 
 import os
@@ -8,6 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+import torch
 from rtmlib import Body
 
 # Configurações do Benchmark
@@ -18,6 +19,7 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 SAVE_VIDEO = True
 SHOW_PREVIEW = False
 KPT_CONF_THRESHOLD = 0.5
+USE_DEPTH = True  # Flag para ativar/desativar a estimação de profundidade
 
 CONFIGURATIONS = {
     "Config_A": {
@@ -55,13 +57,45 @@ def calculate_angle_2d(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
     cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
     return float(np.degrees(np.arccos(cosine_angle)))
 
+class DepthEstimator:
+    """Classe responsável por carregar o modelo MiDaS e inferir o mapa de profundidade."""
+    def __init__(self, device: str = "cpu"):
+        self.device = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
+        print(f"Carregando modelo de profundidade MiDaS no dispositivo: {self.device}...")
+        
+        # trust_repo=True evita confirmações manuais no terminal
+        self.midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
+        self.midas.to(self.device)
+        self.midas.eval()
+
+        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
+        self.transform = midas_transforms.small_transform
+
+    def estimate(self, frame_bgr: np.ndarray) -> np.ndarray:
+        """Gera o mapa de profundidade relativo para o frame de entrada."""
+        img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        input_batch = self.transform(img_rgb).to(self.device)
+
+        with torch.no_grad():
+            prediction = self.midas(input_batch)
+            prediction = torch.nn.functional.interpolate(
+                prediction.unsqueeze(1),
+                size=img_rgb.shape[:2],
+                mode="bicubic",
+                align_corners=False,
+            ).squeeze()
+
+        depth_map = prediction.cpu().numpy()
+        return depth_map
+
 class BiomechanicalEngine:
     @staticmethod
-    def extract_features(person_kpts: np.ndarray, fps: float, prev_wrist_pos=None):
+    def extract_features(person_kpts: np.ndarray, fps: float, depth_map: np.ndarray = None, prev_wrist_pos=None):
         kpts = {name: person_kpts[i][:2] for i, name in enumerate(KEYPOINT_NAMES)}
         confs = {name: person_kpts[i][2] for i, name in enumerate(KEYPOINT_NAMES)}
         features = {}
 
+        # 1. Ângulos articulares 2D
         features["left_elbow_angle_2d_proj"] = calculate_angle_2d(kpts["left_shoulder"], kpts["left_elbow"], kpts["left_wrist"])
         features["right_elbow_angle_2d_proj"] = calculate_angle_2d(kpts["right_shoulder"], kpts["right_elbow"], kpts["right_wrist"])
         features["left_knee_angle_2d_proj"] = calculate_angle_2d(kpts["left_hip"], kpts["left_knee"], kpts["left_ankle"])
@@ -71,6 +105,18 @@ class BiomechanicalEngine:
         features["left_shoulder_angle_2d_proj"] = calculate_angle_2d(kpts["left_elbow"], kpts["left_shoulder"], kpts["left_hip"])
         features["right_shoulder_angle_2d_proj"] = calculate_angle_2d(kpts["right_elbow"], kpts["right_shoulder"], kpts["right_hip"])
 
+        # 2. Amostragem de Profundidade (Z) nos keypoints
+        if depth_map is not None:
+            h, w = depth_map.shape
+            for name, (x, y) in kpts.items():
+                ix, iy = int(round(x)), int(round(y))
+                if 0 <= ix < w and 0 <= iy < h:
+                    val = float(depth_map[iy, ix])
+                    features[f"{name}_depth_z"] = round(val, 2)
+                else:
+                    features[f"{name}_depth_z"] = np.nan
+
+        # 3. Velocidades aparentes dos pulsos
         dt = 1.0 / fps if fps > 0 else 0.033
         for side in ["left", "right"]:
             wrist_key = f"{side}_wrist"
@@ -104,11 +150,21 @@ class EventDetector:
         return df
 
 class PoseDetector:
-    def __init__(self, mode: str, backend: str, device: str):
+    def __init__(self, mode: str, backend: str, device: str, use_depth: bool = True):
         self.model = Body(mode=mode, backend=backend, device=device, to_openpose=False)
+        self.use_depth = use_depth
+        if self.use_depth:
+            self.depth_estimator = DepthEstimator(device=device)
 
     def process_frame(self, frame):
+        # 1. Inferência de Pose com RTMLib
         keypoints, scores = self.model(frame)
+        
+        # 2. Inferência de Profundidade com MiDaS
+        depth_map = None
+        if self.use_depth:
+            depth_map = self.depth_estimator.estimate(frame)
+
         annotated_frame = frame.copy()
         people_keypoints = []
         if keypoints is not None and len(keypoints) > 0:
@@ -116,7 +172,8 @@ class PoseDetector:
                 person_kpts = np.concatenate([person_xy, person_conf[:, None]], axis=1)
                 people_keypoints.append(person_kpts)
                 self._draw_person(annotated_frame, person_kpts)
-        return annotated_frame, people_keypoints
+                
+        return annotated_frame, people_keypoints, depth_map
 
     def _draw_person(self, frame, person_kpts):
         for x, y, conf in person_kpts:
@@ -136,7 +193,7 @@ class BenchmarkExporter:
                 row[f"{name}_y"] = round(float(y), 2)
                 row[f"{name}_conf"] = round(float(conf), 2)
             for feat_name, val in feat.items():
-                row[feat_name] = round(float(val), 2) if not np.isnan(val) else None
+                row[feat_name] = round(float(val), 2) if val is not None and not np.isnan(val) else None
             self.rows.append(row)
 
     def process_and_save(self) -> pd.DataFrame:
@@ -150,7 +207,7 @@ class BenchmarkExporter:
 
 def evaluate_configuration(video_path: Path, config_name: str, config_params: dict):
     print(f"\n--- Avaliando [{config_name}] com o vídeo: {video_path.name} ---")
-    detector = PoseDetector(**config_params)
+    detector = PoseDetector(**config_params, use_depth=USE_DEPTH)
     csv_output_path = OUTPUT_DIR / f"{video_path.stem}_{config_name}_biomechanics.csv"
     video_output_path = OUTPUT_DIR / f"{video_path.stem}_{config_name}_annotated.mp4"
     exporter = BenchmarkExporter(csv_output_path)
@@ -173,16 +230,31 @@ def evaluate_configuration(video_path: Path, config_name: str, config_params: di
             success, frame = cap.read()
             if not success:
                 break
-            annotated_frame, people_keypoints = detector.process_frame(frame)
+            
+            # Processa Pose + Profundidade
+            annotated_frame, people_keypoints, depth_map = detector.process_frame(frame)
+            
             features_list = []
             for person_id, kpts in enumerate(people_keypoints):
                 prev_w = prev_wrists.get(person_id, None)
-                feat, curr_w = BiomechanicalEngine.extract_features(kpts, fps, prev_w)
+                feat, curr_w = BiomechanicalEngine.extract_features(kpts, fps, depth_map, prev_w)
                 features_list.append(feat)
                 prev_wrists[person_id] = curr_w
 
             exporter.add_frame(frame_index, people_keypoints, features_list)
-            frames_cache.append(annotated_frame)
+
+            # Se quiser visualização com Depth lado a lado no vídeo anotado
+            if SAVE_VIDEO and depth_map is not None:
+                depth_norm = cv2.normalize(depth_map, None, 0, 255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                depth_color = cv2.applyColorMap(depth_norm, cv2.COLORMAP_INFERNO)
+                
+                frame_resized = cv2.resize(annotated_frame, (width // 2, height // 2))
+                depth_resized = cv2.resize(depth_color, (width // 2, height // 2))
+                combined_frame = np.hstack((frame_resized, depth_resized))
+                frames_cache.append(combined_frame)
+            else:
+                frames_cache.append(annotated_frame)
+
             features_cache.append(features_list)
             people_kpts_cache.append(people_keypoints)
             frame_index += 1
@@ -196,8 +268,9 @@ def evaluate_configuration(video_path: Path, config_name: str, config_params: di
     if SAVE_VIDEO and frames_cache:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(video_output_path), fourcc, fps, (width, height))
-        for idx, (frame, _, _) in enumerate(zip(frames_cache, features_cache, people_kpts_cache)):
+        out_w, out_h = (width, height // 2) if (USE_DEPTH and frames_cache) else (width, height)
+        writer = cv2.VideoWriter(str(video_output_path), fourcc, fps, (out_w, out_h))
+        for idx, frame in enumerate(frames_cache):
             cv2.putText(frame, f"Config: {config_name} | Frame: {idx}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             writer.write(frame)
         writer.release()
@@ -224,7 +297,7 @@ def main():
         print(f"Nenhum vídeo localizado em '{INPUT_DIR}/'.")
         return
 
-    print("=== INICIANDO BENCHMARK COMPARATIVO (TASK 2) ===")
+    print("benchmark e estimação da profundidade")
     benchmark_summary = {}
 
     for video_file in video_files:
@@ -236,9 +309,7 @@ def main():
                 video_metrics[config_name] = metrics
         benchmark_summary[video_file.name] = video_metrics
 
-    print("\n" + "=" * 50)
-    print(" TABELA DE RESULTADOS DO BENCHMARK (TASK 2)")
-    print("=" * 50)
+    print(" tabela de resumoo do benchmark")
 
     for v_name, configs in benchmark_summary.items():
         if not configs:

@@ -3,8 +3,8 @@
 import numpy as np
 
 EVENTS = {
-    "take_off": {"label": "SAIDA DO CHAO", "definition": "Último frame com apoio antes da fase aérea."},
-    "landing": {"label": "ATERRISSAGEM", "definition": "Primeiro frame com apoio após a fase aérea."},
+    "take_off": {"label": "SAIDA DO CHAO", "definition": "Último frame com contato visível no solo, antes da fase aérea."},
+    "landing": {"label": "ATERRISSAGEM", "definition": "Primeiro frame em que o pé volta a tocar o solo."},
 }
 
 

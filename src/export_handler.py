@@ -8,14 +8,28 @@ import av
 import cv2
 import numpy as np
 
-# Mapeamento estendido para suportar os 4 eventos do pipeline e fallbacks legados
+# Os quatro eventos do ataque. landing não é reescrito como outro nome.
 EVENT_MAP = {
-    "take_off": {"label": "Take Off", "color": (0, 255, 0), "definition": "Momento de descolamento do solo"},
-    "landing": {"label": "Landing", "color": (0, 0, 255), "definition": "Momento do primeiro contato de pouso"},
-    "preparacao_inicio": {"label": "Inicio Preparacao", "color": (255, 255, 0), "definition": "Início da fase de recuo do braço"},
-    "preparacao_maxima_aparente": {"label": "Prep. Maxima", "color": (255, 165, 0), "definition": "Pico máximo de extensão/recuo do braço"},
-    "braco_frente_inicio": {"label": "Braco a Frente", "color": (0, 255, 255), "definition": "Início do movimento do braço à frente"},
-    "saida_vs_apice": {"label": "Saida / Apice", "color": (255, 0, 255), "definition": "Diferenciação entre descolamento (saída) e ápice aéreo"}
+    "take_off": {
+        "label": "Take Off",
+        "color": (0, 255, 0),
+        "definition": "Último frame com contato visível no solo, antes da fase aérea.",
+    },
+    "preparacao_maxima_aparente": {
+        "label": "Prep. Maxima",
+        "color": (255, 165, 0),
+        "definition": "Frame em que a mão do braço de ataque está mais recuada, antes de avançar.",
+    },
+    "braco_frente_inicio": {
+        "label": "Braco a Frente",
+        "color": (0, 255, 255),
+        "definition": "Primeiro frame em que o braço de ataque começa a avançar.",
+    },
+    "landing": {
+        "label": "Landing",
+        "color": (0, 0, 255),
+        "definition": "Primeiro frame em que o pé volta a tocar o solo.",
+    },
 }
 
 try:

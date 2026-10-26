@@ -14,22 +14,22 @@
     "ground_reference": {
         "available": true,
         "type": "local_2d_contacts",
-        "slope": 0.006020338596809728,
-        "offset": 576.6207363434613,
-        "error_body_fraction": 0.022243794937501622,
-        "x_min": 14.150094944261186,
+        "slope": 0.006020035168069138,
+        "offset": 576.6207753093734,
+        "error_body_fraction": 0.022243679098724347,
+        "x_min": 14.150094944261191,
         "x_max": 469.5587679512764,
         "support_frames": 106,
         "camera_valid_fraction": 1.0,
         "contact_anchor_frames": 122,
-        "offset_min": 548.1978857028943,
-        "offset_max": 586.0240415567332
+        "offset_min": 548.1978937364472,
+        "offset_max": 586.024179145015
     },
     "definitions": {
-        "take_off": "Momento de descolamento do solo",
-        "preparacao_maxima_aparente": "Pico máximo de extensão/recuo do braço",
-        "braco_frente_inicio": "Início do movimento do braço à frente",
-        "saida_vs_apice": "Diferenciação entre descolamento (saída) e ápice aéreo"
+        "take_off": "Último frame com contato visível no solo, antes da fase aérea.",
+        "preparacao_maxima_aparente": "Frame em que a mão do braço de ataque está mais recuada, antes de avançar.",
+        "braco_frente_inicio": "Primeiro frame em que o braço de ataque começa a avançar.",
+        "landing": "Primeiro frame em que o pé volta a tocar o solo."
     },
     "model": {
         "name": "Footskate Reducer / ground_detector",
@@ -57,24 +57,38 @@
         },
         {
             "event": "preparacao_maxima_aparente",
-            "status": "VALIDO",
-            "frame": 0,
-            "time_s": 0.0,
-            "reason": ""
+            "status": "detected",
+            "frame": 138,
+            "time_s": 4.6,
+            "frame_range": null,
+            "time_range_s": null,
+            "source": "attacking arm",
+            "reason": null
         },
         {
             "event": "braco_frente_inicio",
-            "status": "VALIDO",
-            "frame": 1,
-            "time_s": 0.033,
-            "reason": ""
+            "status": "detected",
+            "frame": 139,
+            "time_s": 4.633,
+            "frame_range": null,
+            "time_range_s": null,
+            "source": "attacking arm",
+            "reason": null
         },
         {
-            "event": "saida_vs_apice",
+            "event": "landing",
             "status": "estimated",
             "frame": 159,
             "time_s": 5.3,
-            "sub_type": "apice",
+            "frame_range": [
+                158,
+                160
+            ],
+            "time_range_s": [
+                5.267,
+                5.333
+            ],
+            "source": "footskate+ground reference",
             "reason": null
         }
     ],
@@ -97,24 +111,38 @@
         },
         "preparacao_maxima_aparente": {
             "event": "preparacao_maxima_aparente",
-            "status": "VALIDO",
-            "frame": 0,
-            "time_s": 0.0,
-            "reason": ""
+            "status": "detected",
+            "frame": 138,
+            "time_s": 4.6,
+            "frame_range": null,
+            "time_range_s": null,
+            "source": "attacking arm",
+            "reason": null
         },
         "braco_frente_inicio": {
             "event": "braco_frente_inicio",
-            "status": "VALIDO",
-            "frame": 1,
-            "time_s": 0.033,
-            "reason": ""
+            "status": "detected",
+            "frame": 139,
+            "time_s": 4.633,
+            "frame_range": null,
+            "time_range_s": null,
+            "source": "attacking arm",
+            "reason": null
         },
-        "saida_vs_apice": {
-            "event": "saida_vs_apice",
+        "landing": {
+            "event": "landing",
             "status": "estimated",
             "frame": 159,
             "time_s": 5.3,
-            "sub_type": "apice",
+            "frame_range": [
+                158,
+                160
+            ],
+            "time_range_s": [
+                5.267,
+                5.333
+            ],
+            "source": "footskate+ground reference",
             "reason": null
         }
     }

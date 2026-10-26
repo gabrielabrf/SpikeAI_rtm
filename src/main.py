@@ -145,8 +145,10 @@ def extract_poses(video, pose_model, out, athlete=None, interactive=False):
 
 
 class SpikeArmAnalyzer:
-    """Integra a detecção dos 4 eventos do ataque de vôlei com regras do trio,
-    distinção entre Saída e Ápice e suporte a resultados INCONCLUSIVO.
+    """Quatro eventos do ataque: saída, preparação máxima, braço à frente e pouso.
+
+    take_off e landing vêm do contato dos pés e permanecem eventos próprios.
+    A mão mais recuada e o início do avanço são medidos só entre esses dois.
     """
 
     def __init__(
@@ -163,119 +165,120 @@ class SpikeArmAnalyzer:
         self.timestamps = timestamps
         self.fps = fps if fps > 0 else 30.0
 
-    def _extract_arm_metrics(self) -> List[Dict[str, Any]]:
-        metrics = []
-        for idx, pose in enumerate(self.poses):
-            r_shoulder, r_elbow, r_wrist = pose[2], pose[3], pose[4]
-            angle = 0.0
-            velocity = 0.0
+    def _foot_event(self, name: str) -> Dict[str, Any]:
+        for event in self.events_base:
+            if event.get("event") == name:
+                return event
+        return {
+            "event": name,
+            "status": "inconclusive",
+            "frame": None,
+            "time_s": None,
+            "frame_range": None,
+            "time_range_s": None,
+            "source": None,
+            "reason": "Não detectado.",
+        }
 
-            if r_shoulder[2] > 0.2 and r_elbow[2] > 0.2 and r_wrist[2] > 0.2:
-                v1 = r_shoulder[:2] - r_elbow[:2]
-                v2 = r_wrist[:2] - r_elbow[:2]
-                norm_v1 = np.linalg.norm(v1)
-                norm_v2 = np.linalg.norm(v2)
+    def _anchor(self, event: Dict[str, Any], edge: int) -> Optional[int]:
+        if event.get("frame") is not None:
+            return int(event["frame"])
+        bounds = event.get("frame_range")
+        if bounds and bounds[0] is not None and bounds[1] is not None:
+            return int(bounds[edge])
+        return None
 
-                if norm_v1 > 0 and norm_v2 > 0:
-                    cos_theta = np.dot(v1, v2) / (norm_v1 * norm_v2)
-                    angle = np.degrees(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
+    def _wrist_series(self, shoulder: int, wrist: int, start: int, end: int):
+        frames, relative = [], []
+        for index in range(start, end + 1):
+            pose = self.poses[index]
+            if pose[shoulder, 2] > 0.2 and pose[wrist, 2] > 0.2:
+                frames.append(index)
+                relative.append(pose[wrist, :2] - pose[shoulder, :2])
+        if len(frames) < 5:
+            return None
+        relative = np.asarray(relative, dtype=float)
+        centered = relative - relative.mean(axis=0)
+        if np.linalg.norm(centered) < 1:
+            return None
+        axis = np.linalg.svd(centered, full_matrices=False)[2][0]
+        projection = relative @ axis
+        padded = np.pad(projection, 1, mode="edge")
+        smooth = np.median(np.stack([padded[:-2], padded[1:-1], padded[2:]]), axis=0)
+        speed = np.zeros(len(frames))
+        for index in range(1, len(frames)):
+            dt = float(self.timestamps[frames[index]] - self.timestamps[frames[index - 1]])
+            if dt > 0:
+                speed[index] = (smooth[index] - smooth[index - 1]) / dt
+        if np.max(speed) < -np.min(speed):
+            smooth = -smooth
+            speed = -speed
+        return frames, smooth, speed
 
-                if idx > 0 and self.poses[idx - 1][4][2] > 0.2:
-                    dt = self.timestamps[idx] - self.timestamps[idx - 1]
-                    if dt > 0:
-                        dist = np.linalg.norm(
-                            r_wrist[:2] - self.poses[idx - 1][4][:2]
-                        )
-                        velocity = dist / dt
-
-            metrics.append(
-                {"frame": idx, "angle": float(angle), "velocity": float(velocity)}
+    def _detect_arm(self, take_off: Dict[str, Any], landing: Dict[str, Any]):
+        start = self._anchor(take_off, 0)
+        end = self._anchor(landing, 1)
+        if start is None or end is None or end - start < 4:
+            return None, None
+        start = max(0, start)
+        end = min(len(self.poses) - 1, end)
+        candidates = []
+        for shoulder, wrist in ((2, 4), (5, 7)):
+            series = self._wrist_series(shoulder, wrist, start, end)
+            if series is None:
+                continue
+            frames, projection, speed = series
+            peak = int(np.argmax(speed))
+            if peak < 1 or speed[peak] < 80 or projection.max() - projection.min() < 10:
+                continue
+            prep = int(np.argmin(projection[: peak + 1]))
+            forward = next(
+                (index for index in range(prep + 1, len(speed)) if speed[index] >= 0.15 * speed[peak]),
+                None,
             )
-        return metrics
+            if forward is None:
+                continue
+            candidates.append((float(speed[peak]), frames[prep], frames[forward]))
+        if not candidates:
+            return None, None
+        _, prep_frame, forward_frame = max(candidates)
+        return prep_frame, forward_frame
+
+    def _arm_event(self, name: str, frame: Optional[int], reason: str) -> Dict[str, Any]:
+        found = frame is not None
+        return {
+            "event": name,
+            "status": "detected" if found else "inconclusive",
+            "frame": frame,
+            "time_s": round(float(self.timestamps[frame]), 6) if found else None,
+            "frame_range": None,
+            "time_range_s": None,
+            "source": "attacking arm",
+            "reason": None if found else reason,
+        }
 
     def process_arm_events(self) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        metrics = self._extract_arm_metrics()
-        prep_inicio = None
-        saida_apice = None
-
-        for ev in self.events_base:
-            if ev.get("event") in ["take_off", "preparacao_inicio"]:
-                prep_inicio = ev
-                break
-
-        prep_max_frame = None
-        for item in metrics:
-            if item["angle"] > 135 and prep_max_frame is None:
-                prep_max_frame = item["frame"]
-                break
-
-        braco_frente_frame = None
-        if prep_max_frame is not None:
-            for item in metrics[prep_max_frame:]:
-                if item["velocity"] > 150.0:
-                    braco_frente_frame = item["frame"]
-                    break
-
-        for ev in self.events_base:
-            if ev.get("event") in ["landing", "apice", "saida"]:
-                ev_type = ev.get(
-                    "sub_type",
-                    "saida" if ev.get("event") == "take_off" else "apice",
-                )
-                saida_apice = {
-                    "event": "saida_vs_apice",
-                    "status": ev.get("status", "VALIDO"),
-                    "frame": ev.get("frame"),
-                    "time_s": ev.get("time_s"),
-                    "sub_type": ev_type,
-                    "reason": ev.get("reason", ""),
-                }
-                break
-
+        take_off = self._foot_event("take_off")
+        landing = self._foot_event("landing")
+        prep_frame, forward_frame = self._detect_arm(take_off, landing)
+        missing = "Saída ou pouso sem intervalo suficiente para localizar o braço."
+        if self._anchor(take_off, 0) is not None and self._anchor(landing, 1) is not None:
+            missing = "Mão do braço de ataque não pôde ser localizada entre a saída e o pouso."
         final_events = [
-            prep_inicio
-            or {
-                "event": "preparacao_inicio",
-                "status": "INCONCLUSIVO",
-                "frame": None,
-                "time_s": None,
-                "reason": "Não detectado pelo módulo #13",
-            },
-            {
-                "event": "preparacao_maxima_aparente",
-                "status": "VALIDO" if prep_max_frame is not None else "INCONCLUSIVO",
-                "frame": prep_max_frame,
-                "time_s": float(self.timestamps[prep_max_frame])
-                if prep_max_frame is not None
-                else None,
-                "reason": ""
-                if prep_max_frame is not None
-                else "Pico de ângulo de extensão não atingido",
-            },
-            {
-                "event": "braco_frente_inicio",
-                "status": "VALIDO" if braco_frente_frame is not None else "INCONCLUSIVO",
-                "frame": braco_frente_frame,
-                "time_s": float(self.timestamps[braco_frente_frame])
-                if braco_frente_frame is not None
-                else None,
-                "reason": ""
-                if braco_frente_frame is not None
-                else "Aceleração do braço não detectada",
-            },
-            saida_apice
-            or {
-                "event": "saida_vs_apice",
-                "status": "INCONCLUSIVO",
-                "frame": None,
-                "time_s": None,
-                "sub_type": None,
-                "reason": "Não detectado pelo módulo #15",
-            },
+            take_off,
+            self._arm_event(
+                "preparacao_maxima_aparente",
+                prep_frame,
+                missing,
+            ),
+            self._arm_event(
+                "braco_frente_inicio",
+                forward_frame,
+                missing,
+            ),
+            landing,
         ]
-
-        summary = {ev["event"]: ev for ev in final_events}
-        return final_events, summary
+        return final_events, {event["event"]: event for event in final_events}
 
 
 def run(args):

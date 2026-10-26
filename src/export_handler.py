@@ -8,7 +8,23 @@ import av
 import cv2
 import numpy as np
 
-from algorithm_rules import EVENTS
+# Mapeamento estendido para suportar os 4 eventos do pipeline e fallbacks legados
+EVENT_MAP = {
+    "take_off": {"label": "Take Off", "color": (0, 255, 0), "definition": "Momento de descolamento do solo"},
+    "landing": {"label": "Landing", "color": (0, 0, 255), "definition": "Momento do primeiro contato de pouso"},
+    "preparacao_inicio": {"label": "Inicio Preparacao", "color": (255, 255, 0), "definition": "Início da fase de recuo do braço"},
+    "preparacao_maxima_aparente": {"label": "Prep. Maxima", "color": (255, 165, 0), "definition": "Pico máximo de extensão/recuo do braço"},
+    "braco_frente_inicio": {"label": "Braco a Frente", "color": (0, 255, 255), "definition": "Início do movimento do braço à frente"},
+    "saida_vs_apice": {"label": "Saida / Apice", "color": (255, 0, 255), "definition": "Diferenciação entre descolamento (saída) e ápice aéreo"}
+}
+
+try:
+    from algorithm_rules import EVENTS as LEGACY_EVENTS
+    # Mescla mantendo prioridade nos eventos estendidos
+    EVENTS = {**LEGACY_EVENTS, **EVENT_MAP}
+except ImportError:
+    EVENTS = EVENT_MAP
+
 from footskate import CONTACT_NAMES, CONTACT_POINTS, COMMIT, CHECKPOINT_SHA256, MIN_CONF
 
 CONNECTIONS = [(1, 8), (1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7),
@@ -18,21 +34,30 @@ EVENT_FIELDS = ["event", "status", "frame", "time_s", "frame_range", "time_range
 
 
 def pipeline_status(events, alerts=()):
-    """APROVADO se os dois eventos têm frame; senão PENDENTE_REVISAO_MANUAL, com o motivo de cada pendência."""
-    pending = [f"{event['event']}: {event['reason']}" for event in events if event["frame"] is None]
+    """APROVADO se todos os eventos têm frame válido; senão PENDENTE_REVISAO_MANUAL."""
+    pending = [f"{event['event']}: {event.get('reason', 'Não detectado')}" for event in events if event.get("frame") is None or event.get("status") == "INCONCLUSIVO"]
     return ("PENDENTE_REVISAO_MANUAL" if pending else "APROVADO"), [*alerts, *pending]
 
 
 def save_data(video, out, athlete_id, fps, timestamps, probabilities, states, evidence_states, events,
               threshold, ground_info, alerts=()):
     status, notices = pipeline_status(events, alerts)
+    
+    definitions = {}
+    for ev in events:
+        ev_name = ev.get("event")
+        if ev_name in EVENTS:
+            definitions[ev_name] = EVENTS[ev_name].get("definition", "Evento do ataque")
+        else:
+            definitions[ev_name] = "Evento customizado do pipeline"
+
     data = {
         "video_id": video.stem, "pipeline_status": status, "alertas": notices,
         "video": video.name, "attacker_id": athlete_id, "frame_index_base": 0,
         "fps_average": fps, "frame_count": len(timestamps), "time_source": "video_pts",
         "time_origin": "first_video_frame",
         "ground_reference": ground_info,
-        "definitions": {name: spec["definition"] for name, spec in EVENTS.items()},
+        "definitions": definitions,
         "model": {"name": "Footskate Reducer / ground_detector", "commit": COMMIT,
                   "checkpoint_sha256": CHECKPOINT_SHA256, "contact_threshold": threshold,
                   "pose": "RTMPose-m HALPE26 via rtmlib BodyWithFeet"},
@@ -40,7 +65,7 @@ def save_data(video, out, athlete_id, fps, timestamps, probabilities, states, ev
     }
     (out / "events.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     with (out / "events.csv").open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=EVENT_FIELDS, delimiter=";")
+        writer = csv.DictWriter(f, fieldnames=EVENT_FIELDS, delimiter=";", extrasaction='ignore')
         writer.writeheader()
         writer.writerows(events)
     # Dados suficientes para conferir os estados de contato sem repetir RTMPose.
@@ -84,10 +109,13 @@ def draw_overlay(image, pose, probabilities, state, frame_index, timestamp, even
             and event["frame_range"][0] <= frame_index <= event["frame_range"][1]
             for event in events):
         state_text = "TRANSICAO ESTIMADA"
+    
     lines = [f"Frame {frame_index} | {timestamp:.3f} s | {'HIBRIDO' if hybrid else 'FOOTSKATE'}: {state_text}"]
     for event in events:
-        label = EVENTS[event["event"]]["label"]
-        if event["frame"] is None:
+        ev_key = event["event"]
+        label = EVENTS.get(ev_key, {}).get("label", ev_key)
+        
+        if event.get("frame") is None or event.get("status") == "INCONCLUSIVO":
             reason = event.get("reason") or ""
             suffix = " / SEM POUSO OBSERVADO" if "após a fase" in reason else ""
             lines.append(f"{label}: INCONCLUSIVO{suffix}")
@@ -96,15 +124,19 @@ def draw_overlay(image, pose, probabilities, state, frame_index, timestamp, even
             bounds = event.get("frame_range")
             estimated = "~" if event.get("status") == "estimated" else ""
             interval = f" [{bounds[0]}-{bounds[1]}]" if bounds and bounds[0] != bounds[1] else ""
-            lines.append(f"{label}: {estimated}{event['frame']}{interval} | {event['time_s']:.3f} s{marker}")
+            time_val = event.get('time_s') or 0.0
+            lines.append(f"{label}: {estimated}{event['frame']}{interval} | {time_val:.3f} s{marker}")
+
     for row, text in enumerate(lines):
-        highlight = row > 0 and events[row - 1]["frame"] == frame_index
+        highlight = row > 0 and events[row - 1].get("frame") == frame_index
         color = (0, 240, 255) if highlight else (240, 240, 240)
         text_width = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)[0][0]
         font_scale = 0.62 * min(1.0, (panel_width - 24) / max(text_width, 1))
         cv2.putText(canvas, text, (12, 30 + row * 36), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2, cv2.LINE_AA)
-    if any(event["frame"] == frame_index for event in events):
+        
+    if any(event.get("frame") == frame_index for event in events):
         cv2.rectangle(canvas, (2, 2), (panel_width - 3, canvas.shape[0] - 3), (0, 240, 255), 4)
+        
     # H264 yuv420p precisa de dimensões pares.
     return cv2.copyMakeBorder(canvas, 0, canvas.shape[0] % 2, 0, panel_width % 2, cv2.BORDER_CONSTANT)
 

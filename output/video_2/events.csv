@@ -1,0 +1,5 @@
+﻿event;status;frame;time_s;frame_range;time_range_s;source;reason
+take_off;estimated;52;1.733333;[50, 53];[1.666667, 1.766667];footskate+ground reference;
+preparacao_maxima_aparente;VALIDO;0;0.0;;;;
+braco_frente_inicio;VALIDO;1;0.03333333333333333;;;;
+saida_vs_apice;estimated;74;2.466667;;;;

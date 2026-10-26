@@ -43,24 +43,3 @@ incompatível não fornece pontos do jogador vizinho.
 a localização do evento. `pipeline_status=APROVADO` indica que ambos têm frame;
 não representa validação humana nem medição de precisão.
 
-## Verificar
-
-```bash
-python -m unittest discover -s tests
-```
-
-47 testes, incluindo oclusões, identidade, escala, 15–120 FPS, resolução e câmera.
-A referência foi conferida nos quatro clipes disponíveis. A arquitetura e os
-pesos do Footskate original foram preservados, sem treinamento novo.
-
-## O que falta para a issue completa
-
-1. Integrar as regras do trio para preparação máxima aparente do braço e início
-   do braço para frente, com confiança dos pontos e resultado inconclusivo.
-2. Exportar esses dois eventos e desenhar suas marcações no mesmo vídeo.
-3. Conferir um ataque completo com os quatro eventos, seus frames e tempos,
-   a distinção entre saída e ápice e a integração com a seleção do atacante da #15
-   e as regras/contratos da #13 no pipeline principal.
-
-A entrega atual cobre saída e pouso. O recorte automático e a validação
-quantitativa E2-T3 permanecem fora desta entrega.

@@ -77,6 +77,8 @@ def extract_poses(video, pose_model, out, athlete=None, interactive=False):
                 outside = ((pose[:, 0] < 0) | (pose[:, 0] >= image.shape[1]) |
                            (pose[:, 1] < 0) | (pose[:, 1] >= image.shape[0]))
                 pose[outside, 2] = 0
+                if not tracker.confirm_pose(pose):
+                    pose.fill(0)
             poses.append(pose)
             timestamps.append(timestamp)
             if i % 30 == 0:

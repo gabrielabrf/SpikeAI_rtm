@@ -1,0 +1,122 @@
+{
+    "video_id": "video_1",
+    "pipeline_status": "PENDENTE_REVISAO_MANUAL",
+    "alertas": [
+        "FPS abaixo do recomendado (60): 29.99. O intervalo de incerteza dos eventos tende a ser maior.",
+        "take_off: Intervalo de transição amplo demais para localizar o frame."
+    ],
+    "video": "video_1.mp4",
+    "attacker_id": 1,
+    "frame_index_base": 0,
+    "fps_average": 29.991894082680357,
+    "frame_count": 111,
+    "time_source": "video_pts",
+    "time_origin": "first_video_frame",
+    "ground_reference": {
+        "available": true,
+        "type": "local_2d_contacts",
+        "slope": -0.2897949481881524,
+        "offset": 721.4285101062081,
+        "error_body_fraction": 0.03153399344136878,
+        "x_min": 249.17110296373394,
+        "x_max": 468.22202411351947,
+        "support_frames": 37,
+        "camera_valid_fraction": 1.0,
+        "contact_anchor_frames": 40,
+        "offset_min": 693.9056244613354,
+        "offset_max": 729.7875876163044
+    },
+    "definitions": {
+        "take_off": "Momento de descolamento do solo",
+        "preparacao_maxima_aparente": "Pico máximo de extensão/recuo do braço",
+        "braco_frente_inicio": "Início do movimento do braço à frente",
+        "saida_vs_apice": "Diferenciação entre descolamento (saída) e ápice aéreo"
+    },
+    "model": {
+        "name": "Footskate Reducer / ground_detector",
+        "commit": "1bf72e52838a2629e59128d6a49025077303b799",
+        "checkpoint_sha256": "a51cd35847d9d8d2aff2cae1a295c0fac2945e39102b0eefde93f2cc90e44427",
+        "contact_threshold": 0.5,
+        "pose": "RTMPose-m HALPE26 via rtmlib BodyWithFeet"
+    },
+    "events": [
+        {
+            "event": "take_off",
+            "status": "inconclusive",
+            "frame": null,
+            "time_s": null,
+            "frame_range": [
+                56,
+                64
+            ],
+            "time_range_s": [
+                1.867,
+                2.133
+            ],
+            "source": "footskate+ground reference",
+            "reason": "Intervalo de transição amplo demais para localizar o frame."
+        },
+        {
+            "event": "preparacao_maxima_aparente",
+            "status": "VALIDO",
+            "frame": 0,
+            "time_s": 0.0,
+            "reason": ""
+        },
+        {
+            "event": "braco_frente_inicio",
+            "status": "VALIDO",
+            "frame": 1,
+            "time_s": 0.033,
+            "reason": ""
+        },
+        {
+            "event": "saida_vs_apice",
+            "status": "estimated",
+            "frame": 83,
+            "time_s": 2.767,
+            "sub_type": "apice",
+            "reason": null
+        }
+    ],
+    "events_4_summary": {
+        "take_off": {
+            "event": "take_off",
+            "status": "inconclusive",
+            "frame": null,
+            "time_s": null,
+            "frame_range": [
+                56,
+                64
+            ],
+            "time_range_s": [
+                1.867,
+                2.133
+            ],
+            "source": "footskate+ground reference",
+            "reason": "Intervalo de transição amplo demais para localizar o frame."
+        },
+        "preparacao_maxima_aparente": {
+            "event": "preparacao_maxima_aparente",
+            "status": "VALIDO",
+            "frame": 0,
+            "time_s": 0.0,
+            "reason": ""
+        },
+        "braco_frente_inicio": {
+            "event": "braco_frente_inicio",
+            "status": "VALIDO",
+            "frame": 1,
+            "time_s": 0.033,
+            "reason": ""
+        },
+        "saida_vs_apice": {
+            "event": "saida_vs_apice",
+            "status": "estimated",
+            "frame": 83,
+            "time_s": 2.767,
+            "sub_type": "apice",
+            "reason": null
+        }
+    }
+}

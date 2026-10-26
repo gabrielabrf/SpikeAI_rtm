@@ -1,0 +1,5 @@
+﻿event;status;frame;time_s;frame_range;time_range_s;source;reason
+take_off;inconclusive;;;[56, 64];[1.867, 2.133];footskate+ground reference;Intervalo de transição amplo demais para localizar o frame.
+preparacao_maxima_aparente;VALIDO;0;0.0;;;;
+braco_frente_inicio;VALIDO;1;0.033;;;;
+saida_vs_apice;estimated;83;2.767;;;;
